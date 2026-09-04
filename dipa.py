@@ -1,6 +1,6 @@
 # ============================================================
 # YASHU STORE BOT - SIMPLIFIED RESELLER SYSTEM (NO TIER)
-# ✅ MULTIPLE ADMINS + GRACEFUL SHUTDOWN + ALL FIXES
+# ✅ FIXED EVENT LOOP (asyncio.run) + NO MANAGE ADMIN
 # ============================================================
 
 import os
@@ -13,7 +13,6 @@ import random
 import string
 import json
 import requests
-import signal
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from io import BytesIO
@@ -60,7 +59,7 @@ from telegram.ext import (
 # ============================================================
 # SETTINGS (🔴 इन्हें अपने हिसाब से बदलें)
 # ============================================================
-BOT_TOKEN = "8975679008:AAGdsw8mH0KFAg4vF8r68yGbMLm379bTOFM"   # <-- अपना टोकन डालें
+BOT_TOKEN = "8975679008:AAEe416E1uu9bmJ4ewms6ApPxLomfoBsdZY"   # <-- अपना टोकन डालें
 ADMIN_CHAT_ID = 8827266713                                   # <-- मुख्य एडमिन का Chat ID
 SUPPORT = os.getenv("SUPPORT_USERNAME", "@Yashucarromofficial").strip()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -197,6 +196,7 @@ def setup_db():
                 value TEXT
             )
         """)
+        # ---- Admins table (kept for compatibility, but no UI) ----
         cur.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 chat_id INTEGER PRIMARY KEY
@@ -313,6 +313,7 @@ def get_user(uid):
 def is_admin(uid):
     if int(uid) == ADMIN_CHAT_ID:
         return True
+    # If you want to keep the admin table for manual override, keep this.
     with db() as con:
         cur = con.cursor()
         cur.execute("SELECT 1 FROM admins WHERE chat_id=?", (uid,))
@@ -541,16 +542,8 @@ def admin_panel():
         [InlineKeyboardButton("📊 STATISTICS", callback_data="stats")],
         [InlineKeyboardButton("🚫 BLOCK / UNBLOCK", callback_data="block")],
         [InlineKeyboardButton("🎥 WELCOME VIDEO", callback_data="change_welcome_video")],
-        [InlineKeyboardButton("👑 MANAGE ADMINS", callback_data="manage_admins")],
+        # ---- MANAGE ADMINS BUTTON REMOVED ----
         [InlineKeyboardButton("🔙 BACK", callback_data="back")]
-    ])
-
-def manage_admins_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ ADD ADMIN", callback_data="add_admin")],
-        [InlineKeyboardButton("➖ REMOVE ADMIN", callback_data="remove_admin")],
-        [InlineKeyboardButton("📋 LIST ADMINS", callback_data="list_admins")],
-        [InlineKeyboardButton("🔙 BACK", callback_data="admin")]
     ])
 
 # ============================================================
@@ -1258,7 +1251,7 @@ async def admin_user_details(query, target):
         ]))
 
 # ============================================================
-# ADMIN PAGES (including admin management)
+# ADMIN PAGES (no manage admin)
 # ============================================================
 async def wallet_page(query, context):
     if not is_admin(query.from_user.id):
@@ -1350,99 +1343,6 @@ async def reseller_list_page(query):
     if len(msg) > 4000:
         msg = msg[:3900] + "\n... (truncated)"
     await safe_edit(query, msg, reply_markup=back_button("admin"))
-
-# ---- Admin Management ----
-async def manage_admins_page(query):
-    if not is_admin(query.from_user.id):
-        return
-    await safe_edit(query, "👑 **MANAGE ADMINS**\n\nSelect an option below:", manage_admins_menu())
-
-async def add_admin_page(query, context):
-    if query.from_user.id != ADMIN_CHAT_ID:
-        await query.answer("Only the main admin can add other admins.", True)
-        return
-    context.user_data.clear()
-    context.user_data["admin_state"] = "add_admin"
-    await safe_edit(query, "➕ ADD ADMIN\n\nSend the **Chat ID** of the user you want to make admin:", back_button("manage_admins"))
-
-async def remove_admin_page(query, context):
-    if query.from_user.id != ADMIN_CHAT_ID:
-        await query.answer("Only the main admin can remove other admins.", True)
-        return
-    context.user_data.clear()
-    context.user_data["admin_state"] = "remove_admin"
-    await safe_edit(query, "➖ REMOVE ADMIN\n\nSend the **Chat ID** of the admin you want to remove:", back_button("manage_admins"))
-
-async def list_admins_page(query):
-    if not is_admin(query.from_user.id):
-        return
-    with db() as con:
-        cur = con.cursor()
-        cur.execute("SELECT chat_id FROM admins")
-        rows = cur.fetchall()
-    if not rows:
-        text = "📋 No admins found."
-    else:
-        text = "👑 **ADMIN LIST**\n━━━━━━━━━━━━━━━━━━━\n"
-        for (uid,) in rows:
-            user = get_user(uid)
-            if user:
-                name = user[2] or user[1] or str(uid)
-            else:
-                name = str(uid)
-            if uid == ADMIN_CHAT_ID:
-                name += " (Main)"
-            text += f"• `{uid}` – {name}\n"
-    await safe_edit(query, text, back_button("manage_admins"))
-
-async def process_add_admin_text(update, context):
-    uid = update.effective_user.id
-    if uid != ADMIN_CHAT_ID:
-        await update.message.reply_text("❌ Only the main admin can add admins.")
-        return True
-    chat_id = safe_float(update.message.text.strip())
-    if chat_id is None or chat_id <= 0:
-        await update.message.reply_text("❌ Invalid Chat ID. Please enter a positive integer.")
-        return True
-    chat_id = int(chat_id)
-    if chat_id == ADMIN_CHAT_ID:
-        await update.message.reply_text("❌ This is the main admin, already in the list.")
-        return True
-    with db() as con:
-        cur = con.cursor()
-        try:
-            cur.execute("INSERT INTO admins (chat_id) VALUES (?)", (chat_id,))
-            con.commit()
-        except sqlite3.IntegrityError:
-            await update.message.reply_text("❌ This user is already an admin.")
-            return True
-    register_user(update.effective_user)
-    await update.message.reply_text(f"✅ User `{chat_id}` is now an admin!", parse_mode="Markdown")
-    context.user_data.clear()
-    return True
-
-async def process_remove_admin_text(update, context):
-    uid = update.effective_user.id
-    if uid != ADMIN_CHAT_ID:
-        await update.message.reply_text("❌ Only the main admin can remove admins.")
-        return True
-    chat_id = safe_float(update.message.text.strip())
-    if chat_id is None or chat_id <= 0:
-        await update.message.reply_text("❌ Invalid Chat ID. Please enter a positive integer.")
-        return True
-    chat_id = int(chat_id)
-    if chat_id == ADMIN_CHAT_ID:
-        await update.message.reply_text("❌ Cannot remove the main admin.")
-        return True
-    with db() as con:
-        cur = con.cursor()
-        cur.execute("DELETE FROM admins WHERE chat_id=?", (chat_id,))
-        if cur.rowcount == 0:
-            await update.message.reply_text("❌ This user is not an admin.")
-            return True
-    await update.message.reply_text(f"✅ Admin `{chat_id}` removed.", parse_mode="Markdown")
-    context.user_data.clear()
-    return True
 
 # ============================================================
 # STOCK
@@ -1718,7 +1618,7 @@ async def reject_payment(query, context, payment_id):
         await query.answer("Error.", True)
 
 # ============================================================
-# ADMIN TEXT HANDLER
+# ADMIN TEXT HANDLER (no manage admin)
 # ============================================================
 async def handle_admin_text(update, context):
     uid = update.effective_user.id
@@ -1730,11 +1630,6 @@ async def handle_admin_text(update, context):
     if state == "stock_keys":
         await add_stock_text(update, context)
         return True
-
-    if state == "add_admin":
-        return await process_add_admin_text(update, context)
-    if state == "remove_admin":
-        return await process_remove_admin_text(update, context)
 
     if state == "add_reseller_simple":
         try:
@@ -2058,7 +1953,7 @@ async def video_handler(update, context):
         await update.message.reply_text("❌ Please send a video file.")
 
 # ============================================================
-# CALLBACK HANDLER
+# CALLBACK HANDLER (no manage admin)
 # ============================================================
 async def callback_handler(update, context):
     query = update.callback_query
@@ -2109,30 +2004,6 @@ async def callback_handler(update, context):
         if not is_admin(uid):
             return
         await reseller_list_page(query)
-        return
-
-    if data == "manage_admins":
-        if not is_admin(uid):
-            return
-        await manage_admins_page(query)
-        return
-
-    if data == "add_admin":
-        if not is_admin(uid):
-            return
-        await add_admin_page(query, context)
-        return
-
-    if data == "remove_admin":
-        if not is_admin(uid):
-            return
-        await remove_admin_page(query, context)
-        return
-
-    if data == "list_admins":
-        if not is_admin(uid):
-            return
-        await list_admins_page(query)
         return
 
     if data.startswith("useradd_") or data.startswith("userremove_") or data.startswith("userset_"):
@@ -2599,9 +2470,11 @@ async def post_init(app):
     logger.info("Background tasks started.")
 
 async def post_shutdown(app):
+    # Cancel timer tasks
     for task in _timer_tasks:
         if not task.done():
             task.cancel()
+    # Cancel background tasks
     tasks = app.bot_data.get("background_tasks", [])
     for task in tasks:
         if not task.done():
@@ -2611,9 +2484,9 @@ async def post_shutdown(app):
     logger.info("All tasks cancelled.")
 
 # ============================================================
-# MAIN (GRACEFUL SHUTDOWN)
+# MAIN (asyncio.run)
 # ============================================================
-def main():
+async def main():
     if not BOT_TOKEN:
         print("\n❌ ERROR: BOT_TOKEN is not set.")
         return
@@ -2654,45 +2527,14 @@ def main():
     print("========================================")
     print("🔥 YASHU STORE BOT STARTED")
     print(f"✅ Database path: {DB}")
-    print("✅ Asyncio lifecycle: hosting-safe with graceful shutdown")
+    print("✅ Asyncio lifecycle: hosting-safe with asyncio.run")
     print("✅ Auto-verify background task configured")
     print("✅ Rate limiting active")
     print("✅ Welcome Video – Admin can change via panel")
-    print("✅ Multiple Admins supported (main can add/remove)")
     print(f"👑 MAIN ADMIN: {ADMIN_CHAT_ID}")
     print("========================================")
 
-    loop = asyncio.get_event_loop()
-
-    def signal_handler():
-        logger.info("Received termination signal. Shutting down gracefully...")
-        tasks = app.bot_data.get("background_tasks", [])
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        for task in _timer_tasks:
-            if not task.done():
-                task.cancel()
-        loop.call_soon_threadsafe(loop.stop)
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, signal_handler)
-        except Exception as e:
-            logger.warning(f"Could not add signal handler for {sig}: {e}")
-
-    try:
-        loop.run_until_complete(app.run_polling(drop_pending_updates=True, close_loop=False))
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped by user.")
-    finally:
-        pending = asyncio.all_tasks(loop=loop)
-        for task in pending:
-            task.cancel()
-        if pending:
-            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        loop.close()
-        logger.info("Event loop closed.")
+    await app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
